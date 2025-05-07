@@ -1,5 +1,6 @@
 flask
 selenium
 anticaptchaofficial
-chromedriver-autoinstaller
+undetected-chromedriver
 requests
+gunicorn

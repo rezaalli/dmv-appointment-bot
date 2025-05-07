@@ -5,7 +5,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from anticaptchaofficial.imagecaptcha import imagecaptcha
 import undetected_chromedriver as uc
-import chromedriver_autoinstaller
 import time
 import threading
 import logging
@@ -38,7 +37,7 @@ solver.set_key(captcha_api_key)
 def initialize_driver():
     logging.info("🖥️ Initializing Chrome Driver")
     
-    # Download Chrome if not available
+    # Path for the Chrome binary
     chrome_path = shutil.which("google-chrome")
     if not chrome_path:
         logging.error("Google Chrome not found on PATH. Exiting.")
@@ -46,14 +45,15 @@ def initialize_driver():
 
     # Chrome options
     chrome_options = webdriver.ChromeOptions()
+    chrome_options.binary_location = chrome_path
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
 
-    # Initialize the driver
-    driver = uc.Chrome(options=chrome_options)
+    # Start the ChromeDriver
+    driver = webdriver.Chrome(options=chrome_options)
     driver.maximize_window()
     return driver
 

@@ -4,7 +4,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from anticaptchaofficial.imagecaptcha import imagecaptcha
-import undetected_chromedriver as uc
 import time
 import threading
 import logging
@@ -48,8 +47,16 @@ def initialize_driver():
     chrome_options.binary_location = chrome_path
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-dev-shm-usage")  # Docker memory optimization
     chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--disable-crash-reporter")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-in-process-stack-traces")
+    chrome_options.add_argument("--disable-logging")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--log-level=3")
+    chrome_options.add_argument("--output=/dev/null")
     chrome_options.add_argument("--window-size=1920,1080")
 
     # Start the ChromeDriver
@@ -65,7 +72,7 @@ def solve_captcha(driver):
         result = solver.solve_and_return_solution("captcha.png")
         if result != 0:
             logging.info(f"✅ CAPTCHA Solved: {result}")
-            captcha_input = driver.find_element(By.ID, 'captcha-input-id')  # Adjust the ID as needed
+            captcha_input = driver.find_element(By.ID, 'captcha-input-id')
             captcha_input.send_keys(result)
             return True
         else:
@@ -135,7 +142,7 @@ def search_appointments():
                         return
             except Exception as e:
                 logging.error(f"❌ Error during appointment search: {e}")
-            time.sleep(120)  # Wait before retrying
+            time.sleep(120)
 
 # Global variables for status
 status = {"current_location": "", "last_checked": "", "appointment_found": False}

@@ -3,14 +3,15 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
 from anticaptchaofficial.imagecaptcha import imagecaptcha
+import undetected_chromedriver as uc
 import chromedriver_autoinstaller
 import time
 import threading
 import logging
 import base64
 import os
+import shutil
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,16 +34,26 @@ solver = imagecaptcha()
 solver.set_verbose(1)
 solver.set_key(captcha_api_key)
 
-# Automatically install the right ChromeDriver
-chromedriver_autoinstaller.install()
-
-# Global variables for status
-status = {"current_location": "", "last_checked": "", "appointment_found": False}
-
+# Initialize the ChromeDriver
 def initialize_driver():
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    driver = webdriver.Chrome(options=options)
+    logging.info("🖥️ Initializing Chrome Driver")
+    
+    # Download Chrome if not available
+    chrome_path = shutil.which("google-chrome")
+    if not chrome_path:
+        logging.error("Google Chrome not found on PATH. Exiting.")
+        exit(1)
+
+    # Chrome options
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+
+    # Initialize the driver
+    driver = uc.Chrome(options=chrome_options)
     driver.maximize_window()
     return driver
 
@@ -53,15 +64,15 @@ def solve_captcha(driver):
 
         result = solver.solve_and_return_solution("captcha.png")
         if result != 0:
-            logging.info(f"CAPTCHA Solved: {result}")
+            logging.info(f"✅ CAPTCHA Solved: {result}")
             captcha_input = driver.find_element(By.ID, 'captcha-input-id')  # Adjust the ID as needed
             captcha_input.send_keys(result)
             return True
         else:
-            logging.error("CAPTCHA solve failed.")
+            logging.error("❌ CAPTCHA solve failed.")
             return False
     except Exception as e:
-        logging.error(f"Error solving CAPTCHA: {e}")
+        logging.error(f"❌ Error solving CAPTCHA: {e}")
         return False
 
 def select_location(driver, location_name):
@@ -71,11 +82,11 @@ def select_location(driver, location_name):
             parent = button.find_element(By.XPATH, "./..")
             if location_name in parent.text:
                 button.click()
-                logging.info(f"Location selected: {location_name}")
+                logging.info(f"✅ Location selected: {location_name}")
                 return True
         return False
     except Exception as e:
-        logging.error(f"Error selecting location: {e}")
+        logging.error(f"❌ Error selecting location: {e}")
         return False
 
 def find_available_dates(driver):
@@ -84,12 +95,12 @@ def find_available_dates(driver):
         for day in available_days:
             date_text = day.text.strip()
             if date_text.isdigit() and int(date_text) in date_range:
-                logging.info(f"Available date found: {date_text}")
+                logging.info(f"📅 Available date found: {date_text}")
                 day.click()
                 return True
         return False
     except Exception as e:
-        logging.error(f"Error finding available dates: {e}")
+        logging.error(f"❌ Error finding available dates: {e}")
         return False
 
 def fill_form(driver):
@@ -100,10 +111,10 @@ def fill_form(driver):
         driver.find_element(By.ID, 'email').send_keys(email_address)
         driver.find_element(By.XPATH, "//label[contains(text(),'Text me')]").click()
         driver.find_element(By.XPATH, "//button[contains(text(),'Submit')]").click()
-        logging.info("Appointment successfully booked!")
+        logging.info("✅ Appointment successfully booked!")
         return True
     except Exception as e:
-        logging.error(f"Error filling the form: {e}")
+        logging.error(f"❌ Error filling the form: {e}")
         return False
 
 def search_appointments():
@@ -123,12 +134,15 @@ def search_appointments():
                         driver.quit()
                         return
             except Exception as e:
-                logging.error(f"Error during appointment search: {e}")
+                logging.error(f"❌ Error during appointment search: {e}")
             time.sleep(120)  # Wait before retrying
+
+# Global variables for status
+status = {"current_location": "", "last_checked": "", "appointment_found": False}
 
 @app.route('/')
 def home():
-    return "DMV Bot is running!"
+    return "🎉 DMV Bot is running and searching for appointments!"
 
 @app.route('/status')
 def get_status():

@@ -1,143 +1,180 @@
-from flask import Flask, jsonify
+from flask import Flask, render_template, jsonify, Response
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
-from anticaptchaofficial.imagecaptcha import imagecaptcha
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.options import Options
 import time
 import threading
 import logging
-import os
+import traceback
 
-# Flask app setup
 app = Flask(__name__)
 
 # Configuration
-first_name = "Ashley"
-last_name = "Barley"
-phone_number = "808-927-6227"
-email_address = "barleyohana@gmail.com"
-preferred_locations = ["San Diego Clairemont", "San Diego", "Chula Vista"]
-captcha_api_key = os.getenv("CAPTCHA_API_KEY")
-date_range = list(range(3, 19))  # June 3 to June 18
-primary_zip_code = "92108"
-
-# Anti-Captcha Solver
-solver = imagecaptcha()
-solver.set_verbose(1)
-solver.set_key(captcha_api_key)
-
-# Global status tracker
-status = {
-    "current_location": "",
-    "last_checked": "",
-    "appointment_found": False,
-    "last_error": "",
-    "retry_count": 0
+BASE_URL = "https://www.dmv.ca.gov/portal/appointments/select-appointment-type/"
+ZIP_CODE = "92108"
+PREFERRED_LOCATIONS = ["San Diego Clairemont", "San Diego", "Chula Vista"]
+DATE_RANGE = ("2025-06-03", "2025-06-18")
+FORM_DATA = {
+    "first_name": "Ashley",
+    "last_name": "Barley",
+    "email": "barleyohana@gmail.com",
+    "phone": "808-927-6227"
 }
 
-# Setup logging
-logging.basicConfig(filename="logs.txt", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Selenium Configuration
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--window-size=1920,1080")
+chrome_options.add_argument("--disable-gpu")
 
-# === DRIVER INITIALIZATION ===
+# Logging Configuration
+logging.basicConfig(
+    filename='dmv_bot.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+)
+
+# --- STREAMING LOGS ---
+def stream_logs():
+    def generate():
+        with open('dmv_bot.log') as log_file:
+            while True:
+                line = log_file.readline()
+                if line:
+                    yield f"data:{line}\n\n"
+                time.sleep(1)
+    return Response(generate(), mimetype="text/event-stream")
+
+# --- DRIVER INITIALIZATION ---
 def initialize_driver():
-    logging.info("🖥️ Initializing Chrome Driver")
-    
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1280x1024")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--remote-debugging-port=9222")
-    
-    try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        driver.set_page_load_timeout(30)
-        logging.info("✅ Chrome Driver initialized successfully")
-        return driver
-    except Exception as e:
-        logging.error(f"🚨 Chrome Driver failed to initialize: {e}")
-        status["last_error"] = str(e)
-        status["retry_count"] += 1
-        if status["retry_count"] >= 3:
-            logging.error("🚨 Maximum retry attempts reached. Restarting the bot...")
-            status["retry_count"] = 0
-        time.sleep(60)
-        return initialize_driver()
+    logging.info("Starting Chrome Driver")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    driver.set_page_load_timeout(60)
+    return driver
 
-# === APPOINTMENT SEARCH ===
-def search_appointments():
-    while not status["appointment_found"]:
-        driver = initialize_driver()
-        
-        for location in preferred_locations:
+# --- MAIN APPOINTMENT BOT ---
+def book_appointment():
+    while True:
+        try:
+            logging.info("🚀 Starting Appointment Bot")
+            driver = initialize_driver()
+            driver.get(BASE_URL)
+            time.sleep(2)
+
+            # Step 1: Click "First-time DL Application"
+            logging.info("👉 Clicking First-time DL Application")
+            driver.find_element(By.LINK_TEXT, "First-time DL Application").click()
+            time.sleep(2)
+
+            # Step 2: Click "Get an Appointment"
+            logging.info("👉 Selecting 'Get an Appointment'")
+            driver.find_element(By.XPATH, "//button[contains(text(), 'Get an Appointment')]").click()
+            time.sleep(2)
+
+            # Step 3: Select "REAL ID Driver's License / REAL ID"
+            logging.info("👉 Selecting REAL ID option")
+            driver.find_element(By.LINK_TEXT, "REAL ID Driver's License / REAL ID").click()
+            time.sleep(2)
+
+            # Step 4: Enter ZIP Code and search
+            logging.info(f"👉 Entering ZIP code: {ZIP_CODE}")
+            zip_input = driver.find_element(By.ID, "office-zip")
+            zip_input.send_keys(ZIP_CODE)
+            zip_input.send_keys(Keys.RETURN)
+            time.sleep(3)
+
+            # Step 5: Attempt to select preferred location
+            logging.info("🔎 Searching for preferred location")
+            locations = driver.find_elements(By.CLASS_NAME, "location-card")
+            success = False
+            for location in locations:
+                for preferred in PREFERRED_LOCATIONS:
+                    if preferred in location.text:
+                        logging.info(f"✅ Location found: {preferred}")
+                        location.find_element(By.XPATH, ".//button[contains(text(), 'Select Location')]").click()
+                        success = True
+                        break
+                if success:
+                    break
+            if not success:
+                raise Exception("Preferred location not found")
+
+            time.sleep(3)
+
+            # Step 6: Check for available dates
+            logging.info("🔍 Scanning for available dates.")
+            available_dates = driver.find_elements(By.CLASS_NAME, "date-available")
+            date_found = False
+            for date in available_dates:
+                date_text = date.get_attribute("data-date")
+                if DATE_RANGE[0] <= date_text <= DATE_RANGE[1]:
+                    logging.info(f"✅ Available date found: {date_text}")
+                    date.click()
+                    date_found = True
+                    break
+            if not date_found:
+                raise Exception("No dates available within range")
+
+            # Step 7: Fill out the form
+            logging.info("📝 Filling out form with user information.")
+            driver.find_element(By.ID, "firstName").send_keys(FORM_DATA["first_name"])
+            driver.find_element(By.ID, "lastName").send_keys(FORM_DATA["last_name"])
+            driver.find_element(By.ID, "email").send_keys(FORM_DATA["email"])
+            driver.find_element(By.ID, "phoneNumber").send_keys(FORM_DATA["phone"])
+            driver.find_element(By.XPATH, "//button[contains(text(), 'Submit')]").click()
+            logging.info("🎉 Appointment Successfully Booked!")
+            driver.quit()
+            return
+
+        except Exception as e:
+            logging.error(f"❌ Error Occurred: {str(e)}")
+            traceback.print_exc()
             try:
-                logging.info(f"🌐 Navigating to DMV site for {location}")
-                driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/S")
-                status["current_location"] = location
-                status["last_checked"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                driver.quit()
+            except:
+                pass
+            logging.info("⏳ Retrying in 30 seconds...")
+            time.sleep(30)
 
-                # Simulation of form interaction
-                logging.info(f"🔎 Searching available dates at {location}")
-                
-                # Logic for clicking the location, captcha handling, and form filling goes here
-                # --- Placeholder for logic ---
-                
-                # If tab crashes, restart
-                if "tab crashed" in driver.page_source.lower():
-                    logging.error("🚨 Tab crashed. Restarting browser.")
-                    driver.quit()
-                    status["retry_count"] += 1
-                    if status["retry_count"] >= 3:
-                        logging.error("🚨 Maximum retry attempts reached. Restarting the bot...")
-                        status["retry_count"] = 0
-                    continue
-
-                logging.info(f"✅ Successfully navigated to {location}")
-                status["retry_count"] = 0  # Reset retry count after successful navigation
-
-            except Exception as e:
-                logging.error(f"❌ Error during appointment search: {e}")
-                status["last_error"] = str(e)
-                status["retry_count"] += 1
-                if status["retry_count"] >= 3:
-                    logging.error("🚨 Maximum retry attempts reached. Restarting the bot...")
-                    status["retry_count"] = 0
-        
-        driver.quit()
-        time.sleep(120)  # Retry every 2 minutes
-
-# === FLASK ENDPOINTS ===
+# --- FLASK ENDPOINTS ---
 @app.route('/')
 def home():
-    return "🎉 DMV Bot is running and searching for appointments!"
-
-@app.route('/status')
-def get_status():
-    return jsonify(status)
+    return """
+    <h1>DMV Appointment Bot</h1>
+    <ul>
+        <li><a href="/logs">View Real-time Logs</a></li>
+        <li><a href="/status">Check Status</a></li>
+    </ul>
+    """
 
 @app.route('/logs')
-def get_logs():
-    try:
-        with open("logs.txt", "r") as file:
-            logs = file.read().replace("\n", "<br>")
-        return f"<pre>{logs}</pre>"
-    except FileNotFoundError:
-        return "No logs found."
+def logs():
+    return """
+    <h1>Real-time Logs</h1>
+    <div id="logs"></div>
+    <script>
+        const evtSource = new EventSource("/stream");
+        evtSource.onmessage = function(event) {
+            const newElement = document.createElement("pre");
+            newElement.textContent = event.data;
+            document.getElementById("logs").appendChild(newElement);
+        };
+    </script>
+    """
 
-@app.route('/health')
-def health_check():
-    if status["last_error"]:
-        return jsonify({"status": "unhealthy", "reason": status["last_error"]}), 500
-    return jsonify({"status": "healthy"}), 200
+@app.route('/stream')
+def stream():
+    return stream_logs()
 
-def run_bot():
-    threading.Thread(target=search_appointments).start()
+@app.route('/status')
+def status():
+    return jsonify({"status": "Running", "last_checked": time.strftime("%Y-%m-%d %H:%M:%S")})
 
-if __name__ == "__main__":
-    run_bot()
-    app.run(host="0.0.0.0", port=5000)
+if __name__ == '__main__':
+    threading.Thread(target=book_appointment).start()
+    app.run(host='0.0.0.0', port=5000)

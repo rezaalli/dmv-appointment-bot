@@ -1,180 +1,152 @@
-from flask import Flask, render_template, jsonify, Response
+import os
+import time
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-import time
-import threading
-import logging
-import traceback
+from webdriver_manager.chrome import ChromeDriverManager
+from flask import Flask, render_template
+from threading import Thread
 
 app = Flask(__name__)
 
-# Configuration
-BASE_URL = "https://www.dmv.ca.gov/portal/appointments/select-appointment-type/"
-ZIP_CODE = "92108"
-PREFERRED_LOCATIONS = ["San Diego Clairemont", "San Diego", "Chula Vista"]
-DATE_RANGE = ("2025-06-03", "2025-06-18")
-FORM_DATA = {
+logging.basicConfig(level=logging.INFO)
+
+# User Information
+USER_INFO = {
     "first_name": "Ashley",
     "last_name": "Barley",
     "email": "barleyohana@gmail.com",
     "phone": "808-927-6227"
 }
 
-# Selenium Configuration
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--window-size=1920,1080")
-chrome_options.add_argument("--disable-gpu")
+# Target Information
+APPOINTMENT_URL = "https://www.dmv.ca.gov/portal/appointments/select-appointment-type/ukpx.aspx?pid=1&ruleid=341"
+ZIP_CODE = "92108"
+PREFERRED_LOCATION = "San Diego Clairemont"
+DATE_RANGE = ("June 3", "June 18")
 
-# Logging Configuration
-logging.basicConfig(
-    filename='dmv_bot.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-)
-
-# --- STREAMING LOGS ---
-def stream_logs():
-    def generate():
-        with open('dmv_bot.log') as log_file:
-            while True:
-                line = log_file.readline()
-                if line:
-                    yield f"data:{line}\n\n"
-                time.sleep(1)
-    return Response(generate(), mimetype="text/event-stream")
-
-# --- DRIVER INITIALIZATION ---
-def initialize_driver():
-    logging.info("Starting Chrome Driver")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-    driver.set_page_load_timeout(60)
+# Initialize Chrome WebDriver
+def create_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
     return driver
 
-# --- MAIN APPOINTMENT BOT ---
-def book_appointment():
+# Navigate to the appointment page
+def navigate_to_appointment_page(driver):
+    logging.info(f"🌐 Navigating to appointment page")
+    driver.get(APPOINTMENT_URL)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Office Visit')]"))
+        )
+        logging.info("✅ Successfully loaded appointment page.")
+    except Exception as e:
+        logging.error(f"❌ Error loading appointment page: {str(e)}")
+        driver.quit()
+        return False
+    return True
+
+# Search for location and select
+def search_and_select_location(driver):
+    logging.info("🔎 Searching for location")
+    zip_input = driver.find_element(By.XPATH, "//input[@placeholder='Enter City or ZIP Code']")
+    zip_input.clear()
+    zip_input.send_keys(ZIP_CODE)
+    zip_input.submit()
+    time.sleep(2)
+
+    try:
+        location_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, f"//button[contains(text(), '{PREFERRED_LOCATION}')]"))
+        )
+        location_button.click()
+        logging.info(f"✅ Selected location: {PREFERRED_LOCATION}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Failed to select location: {str(e)}")
+        return False
+
+# Select the date and time
+def select_date_and_time(driver):
+    logging.info("📅 Selecting a date and time")
+    try:
+        date_button = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.XPATH, f"//div[@aria-label='Open Times'][contains(text(), '{DATE_RANGE[0]}')]"))
+        )
+        date_button.click()
+        logging.info(f"✅ Date selected: {DATE_RANGE[0]}")
+        
+        # Select the first available time
+        time_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "(//button[contains(@class, 'select-time-button')])[1]"))
+        )
+        time_button.click()
+        logging.info(f"✅ Time slot selected.")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Failed to select date or time: {str(e)}")
+        return False
+
+# Fill out user information
+def fill_out_information(driver):
+    logging.info("📝 Filling out user information")
+    try:
+        driver.find_element(By.ID, "FirstName").send_keys(USER_INFO['first_name'])
+        driver.find_element(By.ID, "LastName").send_keys(USER_INFO['last_name'])
+        driver.find_element(By.ID, "Email").send_keys(USER_INFO['email'])
+        driver.find_element(By.ID, "Phone").send_keys(USER_INFO['phone'])
+
+        # Select the "Text me" option
+        text_option = driver.find_element(By.XPATH, "//label[contains(text(), 'Text me')]")
+        text_option.click()
+        
+        submit_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Submit')]")
+        submit_button.click()
+        
+        logging.info("✅ Information submitted successfully.")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Failed to submit information: {str(e)}")
+        return False
+
+# Main bot process
+def appointment_bot():
     while True:
-        try:
-            logging.info("🚀 Starting Appointment Bot")
-            driver = initialize_driver()
-            driver.get(BASE_URL)
-            time.sleep(2)
+        logging.info("🚀 Starting Appointment Bot")
+        driver = create_driver()
 
-            # Step 1: Click "First-time DL Application"
-            logging.info("👉 Clicking First-time DL Application")
-            driver.find_element(By.LINK_TEXT, "First-time DL Application").click()
-            time.sleep(2)
-
-            # Step 2: Click "Get an Appointment"
-            logging.info("👉 Selecting 'Get an Appointment'")
-            driver.find_element(By.XPATH, "//button[contains(text(), 'Get an Appointment')]").click()
-            time.sleep(2)
-
-            # Step 3: Select "REAL ID Driver's License / REAL ID"
-            logging.info("👉 Selecting REAL ID option")
-            driver.find_element(By.LINK_TEXT, "REAL ID Driver's License / REAL ID").click()
-            time.sleep(2)
-
-            # Step 4: Enter ZIP Code and search
-            logging.info(f"👉 Entering ZIP code: {ZIP_CODE}")
-            zip_input = driver.find_element(By.ID, "office-zip")
-            zip_input.send_keys(ZIP_CODE)
-            zip_input.send_keys(Keys.RETURN)
-            time.sleep(3)
-
-            # Step 5: Attempt to select preferred location
-            logging.info("🔎 Searching for preferred location")
-            locations = driver.find_elements(By.CLASS_NAME, "location-card")
-            success = False
-            for location in locations:
-                for preferred in PREFERRED_LOCATIONS:
-                    if preferred in location.text:
-                        logging.info(f"✅ Location found: {preferred}")
-                        location.find_element(By.XPATH, ".//button[contains(text(), 'Select Location')]").click()
-                        success = True
+        if navigate_to_appointment_page(driver):
+            if search_and_select_location(driver):
+                if select_date_and_time(driver):
+                    if fill_out_information(driver):
+                        logging.info("🎉 Appointment successfully booked!")
+                        driver.quit()
                         break
-                if success:
-                    break
-            if not success:
-                raise Exception("Preferred location not found")
+        logging.info("🔄 Retrying in 60 seconds...")
+        driver.quit()
+        time.sleep(60)
 
-            time.sleep(3)
-
-            # Step 6: Check for available dates
-            logging.info("🔍 Scanning for available dates.")
-            available_dates = driver.find_elements(By.CLASS_NAME, "date-available")
-            date_found = False
-            for date in available_dates:
-                date_text = date.get_attribute("data-date")
-                if DATE_RANGE[0] <= date_text <= DATE_RANGE[1]:
-                    logging.info(f"✅ Available date found: {date_text}")
-                    date.click()
-                    date_found = True
-                    break
-            if not date_found:
-                raise Exception("No dates available within range")
-
-            # Step 7: Fill out the form
-            logging.info("📝 Filling out form with user information.")
-            driver.find_element(By.ID, "firstName").send_keys(FORM_DATA["first_name"])
-            driver.find_element(By.ID, "lastName").send_keys(FORM_DATA["last_name"])
-            driver.find_element(By.ID, "email").send_keys(FORM_DATA["email"])
-            driver.find_element(By.ID, "phoneNumber").send_keys(FORM_DATA["phone"])
-            driver.find_element(By.XPATH, "//button[contains(text(), 'Submit')]").click()
-            logging.info("🎉 Appointment Successfully Booked!")
-            driver.quit()
-            return
-
-        except Exception as e:
-            logging.error(f"❌ Error Occurred: {str(e)}")
-            traceback.print_exc()
-            try:
-                driver.quit()
-            except:
-                pass
-            logging.info("⏳ Retrying in 30 seconds...")
-            time.sleep(30)
-
-# --- FLASK ENDPOINTS ---
+# Flask route for monitoring
 @app.route('/')
 def home():
-    return """
-    <h1>DMV Appointment Bot</h1>
-    <ul>
-        <li><a href="/logs">View Real-time Logs</a></li>
-        <li><a href="/status">Check Status</a></li>
-    </ul>
-    """
+    return render_template('index.html', status="Bot is running...")
 
-@app.route('/logs')
-def logs():
-    return """
-    <h1>Real-time Logs</h1>
-    <div id="logs"></div>
-    <script>
-        const evtSource = new EventSource("/stream");
-        evtSource.onmessage = function(event) {
-            const newElement = document.createElement("pre");
-            newElement.textContent = event.data;
-            document.getElementById("logs").appendChild(newElement);
-        };
-    </script>
-    """
+# Start the bot in a separate thread
+def start_bot():
+    bot_thread = Thread(target=appointment_bot)
+    bot_thread.start()
 
-@app.route('/stream')
-def stream():
-    return stream_logs()
-
-@app.route('/status')
-def status():
-    return jsonify({"status": "Running", "last_checked": time.strftime("%Y-%m-%d %H:%M:%S")})
-
+# Start Flask app
 if __name__ == '__main__':
-    threading.Thread(target=book_appointment).start()
+    start_bot()
     app.run(host='0.0.0.0', port=5000)

@@ -1,99 +1,114 @@
-# app.py
-import time
-import random
-import logging
+from flask import Flask, request, jsonify
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-import requests
+import random
+import time
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+app = Flask(__name__)
 
-# Proxy list
-proxies = [
+# Global Configurations
+PROXY_LIST = [
     "35.86.81.136:3128",
     "18.132.36.51:3128",
     "80.1.215.23:8888",
     "13.126.217.46:3128",
-    "119.156.195.173:3128",
-    # Add more proxies as needed...
+    "119.156.195.173:3128"
 ]
 
-# Initialize driver
+DMV_URL = "https://www.dmv.ca.gov/portal/appointments/select-location/A"
+
+# Initialize Chrome Driver
 def init_driver():
-    logger.info("🚀 Initializing Chrome Driver")
-    
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--window-size=1920,1080")
 
-    # Set up ChromeDriver explicitly
+    # Set up proxy
+    proxy = get_working_proxy()
+    if proxy:
+        chrome_options.add_argument(f'--proxy-server={proxy}')
+        print(f"🌐 Using Proxy: {proxy}")
+    
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.set_page_load_timeout(30)
-    logger.info("✅ Chrome Driver Initialized Successfully")
+    driver.set_page_load_timeout(60)
     return driver
 
-# Proxy rotation
-def get_random_proxy():
-    return random.choice(proxies)
+# Get a working proxy
+def get_working_proxy():
+    print("🔄 Rotating through proxies...")
+    for proxy in PROXY_LIST:
+        if is_proxy_alive(proxy):
+            print(f"✅ Proxy working: {proxy}")
+            return proxy
+    print("❌ No working proxies found.")
+    return None
 
-# Check if the proxy is alive
+# Verify if a proxy is alive
 def is_proxy_alive(proxy):
     try:
         response = requests.get("https://www.dmv.ca.gov", proxies={"http": proxy, "https": proxy}, timeout=5)
-        return response.status_code == 200
+        if response.status_code == 200:
+            return True
     except Exception as e:
-        logger.warning(f"⚠️ Proxy {proxy} is not reachable: {e}")
-        return False
+        print(f"⚠️ Proxy failed: {proxy} - {str(e)}")
+    return False
 
-# Start navigation
-def navigate_to_dmv(driver):
-    driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
-    logger.info("🌐 Navigated to DMV Location Selection Page")
-    time.sleep(3)
+# Wait for an element to load
+def wait_for_element(driver, xpath, timeout=30):
+    try:
+        element = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.XPATH, xpath))
+        )
+        return element
+    except Exception as e:
+        print(f"🔴 Element not found: {xpath}. Retrying...")
+        driver.save_screenshot("/mnt/data/page_load_error.png")
+        return None
 
-# Main loop
+# Main Bot Logic
 def main_loop():
     while True:
-        try:
-            driver = init_driver()
-            navigate_to_dmv(driver)
-            
-            # Check if page is loaded correctly
-            if "Which office would you like to visit?" not in driver.page_source:
-                raise Exception("❌ Page did not load properly.")
-            
-            logger.info("✅ Page Loaded Successfully - Ready for next step.")
-            
-            # Example: Select a location (customize this step as needed)
-            select_buttons = driver.find_elements(By.XPATH, "//button[contains(text(), 'Select Location')]")
-            if select_buttons:
-                select_buttons[0].click()
-                logger.info("🏢 Location selected.")
-            else:
-                logger.warning("⚠️ No locations found, restarting in 60 seconds...")
-                driver.quit()
-                time.sleep(60)
-                continue
-            
-            # Further steps (Form filling, etc.) can go here...
-            
-            driver.quit()
-            time.sleep(30)  # Wait before retrying
+        print("🚀 Starting Appointment Bot")
+        driver = init_driver()
         
-        except Exception as e:
-            logger.error(f"❌ Critical error: {e}")
-            if driver:
-                driver.quit()
-            time.sleep(60)  # Retry after a minute
+        try:
+            print("🌐 Navigating to DMV Page")
+            driver.get(DMV_URL)
 
-# Run the bot
+            # Check if the page loaded properly
+            if not wait_for_element(driver, "//h1[contains(text(), 'Which office would you like to visit?')]"):
+                print("❌ Critical error: Page did not load properly.")
+                driver.quit()
+                continue
+
+            print("✅ Page loaded successfully, proceeding...")
+            # Insert further navigation and interaction logic here...
+
+        except Exception as e:
+            print(f"❌ Error during execution: {str(e)}")
+        finally:
+            driver.quit()
+            print("🔄 Restarting in 60 seconds...")
+            time.sleep(60)
+
+# Start the Flask app
+@app.route('/start', methods=['GET'])
+def start_bot():
+    try:
+        main_loop()
+        return jsonify({"status": "Bot started successfully"}), 200
+    except Exception as e:
+        return jsonify({"status": "Error", "message": str(e)}), 500
+
 if __name__ == "__main__":
-    main_loop()
+    app.run(host='0.0.0.0', port=8080, debug=True)

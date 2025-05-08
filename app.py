@@ -10,14 +10,6 @@ import time
 import threading
 import logging
 import os
-import shutil
-
-# Setup logging to a file and console
-logging.basicConfig(
-    filename="logs.txt",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
 
 # Flask app setup
 app = Flask(__name__)
@@ -37,80 +29,89 @@ solver = imagecaptcha()
 solver.set_verbose(1)
 solver.set_key(captcha_api_key)
 
-# Global variables for status
+# Global status tracker
 status = {
     "current_location": "",
     "last_checked": "",
     "appointment_found": False,
-    "last_error": ""
+    "last_error": "",
+    "retry_count": 0
 }
 
+# Setup logging
+logging.basicConfig(filename="logs.txt", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# === DRIVER INITIALIZATION ===
 def initialize_driver():
     logging.info("🖥️ Initializing Chrome Driver")
     
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-software-rasterizer")
-    chrome_options.add_argument("--window-size=1280x1024")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--disable-plugins")
-    chrome_options.add_argument("--single-process")
-    chrome_options.add_argument("--disable-application-cache")
-    chrome_options.add_argument("--disable-crash-reporter")
-    chrome_options.add_argument("--disable-logging")
-    chrome_options.add_argument("--disable-in-process-stack-traces")
-    chrome_options.add_argument("--disable-background-timer-throttling")
-    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-    chrome_options.add_argument("--disable-client-side-phishing-detection")
-    chrome_options.add_argument("--disable-ipc-flooding-protection")
-    chrome_options.add_argument("--disable-renderer-backgrounding")
-    chrome_options.add_argument("--no-first-run")
-    chrome_options.add_argument("--no-default-browser-check")
-    chrome_options.add_argument("--disable-popup-blocking")
-    chrome_options.add_argument("--incognito")
-    chrome_options.add_argument("--remote-debugging-port=9222")
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1280x1024")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--remote-debugging-port=9222")
     
     try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
         driver.set_page_load_timeout(30)
-        driver.maximize_window()
+        logging.info("✅ Chrome Driver initialized successfully")
         return driver
     except Exception as e:
         logging.error(f"🚨 Chrome Driver failed to initialize: {e}")
         status["last_error"] = str(e)
+        status["retry_count"] += 1
+        if status["retry_count"] >= 3:
+            logging.error("🚨 Maximum retry attempts reached. Restarting the bot...")
+            status["retry_count"] = 0
+        time.sleep(60)
+        return initialize_driver()
 
+# === APPOINTMENT SEARCH ===
 def search_appointments():
     while not status["appointment_found"]:
         driver = initialize_driver()
-        if not driver:
-            time.sleep(60)
-            continue
         
         for location in preferred_locations:
             try:
+                logging.info(f"🌐 Navigating to DMV site for {location}")
                 driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/S")
-                logging.info(f"🌐 Navigated to DMV Site: {location}")
-                # Add location search logic here
-                time.sleep(2)
+                status["current_location"] = location
+                status["last_checked"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                # Simulation of form interaction
+                logging.info(f"🔎 Searching available dates at {location}")
                 
-                # If tab crashes, retry
+                # Logic for clicking the location, captcha handling, and form filling goes here
+                # --- Placeholder for logic ---
+                
+                # If tab crashes, restart
                 if "tab crashed" in driver.page_source.lower():
                     logging.error("🚨 Tab crashed. Restarting browser.")
                     driver.quit()
-                    driver = initialize_driver()
+                    status["retry_count"] += 1
+                    if status["retry_count"] >= 3:
+                        logging.error("🚨 Maximum retry attempts reached. Restarting the bot...")
+                        status["retry_count"] = 0
                     continue
+
+                logging.info(f"✅ Successfully navigated to {location}")
+                status["retry_count"] = 0  # Reset retry count after successful navigation
 
             except Exception as e:
                 logging.error(f"❌ Error during appointment search: {e}")
                 status["last_error"] = str(e)
+                status["retry_count"] += 1
+                if status["retry_count"] >= 3:
+                    logging.error("🚨 Maximum retry attempts reached. Restarting the bot...")
+                    status["retry_count"] = 0
         
         driver.quit()
-        time.sleep(120)
+        time.sleep(120)  # Retry every 2 minutes
 
-# Flask Endpoints
+# === FLASK ENDPOINTS ===
 @app.route('/')
 def home():
     return "🎉 DMV Bot is running and searching for appointments!"
@@ -121,9 +122,18 @@ def get_status():
 
 @app.route('/logs')
 def get_logs():
-    with open("logs.txt", "r") as file:
-        logs = file.read().replace("\n", "<br>")
-    return f"<pre>{logs}</pre>"
+    try:
+        with open("logs.txt", "r") as file:
+            logs = file.read().replace("\n", "<br>")
+        return f"<pre>{logs}</pre>"
+    except FileNotFoundError:
+        return "No logs found."
+
+@app.route('/health')
+def health_check():
+    if status["last_error"]:
+        return jsonify({"status": "unhealthy", "reason": status["last_error"]}), 500
+    return jsonify({"status": "healthy"}), 200
 
 def run_bot():
     threading.Thread(target=search_appointments).start()

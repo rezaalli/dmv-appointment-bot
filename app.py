@@ -69,6 +69,11 @@ def start_appointment_bot():
             logger.info("⏳ Waiting for page to load completely...")
             time.sleep(10)  # Added buffer time for JavaScript
 
+            if driver.current_url != "https://www.dmv.ca.gov/portal/appointments/select-location/A":
+                logger.warning(f"🔄 Redirected to {driver.current_url}, forcing navigation back.")
+                driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
+                time.sleep(5)
+
             # Screenshot for debugging
             driver.save_screenshot('/mnt/data/dmv_screenshot.png')
             logger.info("🖼️ Screenshot saved to /mnt/data/dmv_screenshot.png")
@@ -95,6 +100,18 @@ def start_appointment_bot():
             preferred_location = driver.find_element(By.CSS_SELECTOR, "button[data-location-id='2']")
             preferred_location.click()
             logger.info("📍 Preferred location selected: San Diego Clairemont")
+
+            # Wait for the page response
+            time.sleep(5)
+
+            # Check for "Sorry, no dates available"
+            if "Sorry, no dates available for this office" in driver.page_source:
+                logger.warning("⚠️ No dates available for this office. Restarting the process...")
+                driver.save_screenshot('/mnt/data/no_dates_available.png')
+                logger.info("🖼️ Screenshot saved to /mnt/data/no_dates_available.png")
+                driver.quit()
+                time.sleep(60)
+                continue
 
             # Wait for the appointment page
             WebDriverWait(driver, 20).until(

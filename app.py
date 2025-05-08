@@ -10,7 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import requests
-from requests.exceptions import ProxyError, ConnectTimeout
+from requests.exceptions import ProxyError, ConnectTimeout, SSLError
 
 # --- Logging Configuration ---
 logging.basicConfig(level=logging.INFO)
@@ -36,14 +36,17 @@ FAILED_PROXIES = {}
 def is_proxy_alive(proxy):
     """Check if a proxy is alive by pinging a simple site."""
     try:
-        response = requests.get("https://www.dmv.ca.gov", proxies={"http": proxy, "https": proxy}, timeout=5)
+        response = requests.get("https://www.dmv.ca.gov", 
+                                proxies={"http": f"http://{proxy}", "https": f"http://{proxy}"},
+                                timeout=5,
+                                verify=False)  # Disable SSL verification for testing
         if response.status_code == 200:
             logger.info(f"✅ Proxy {proxy} is alive.")
             return True
         else:
             logger.warning(f"⚠️ Proxy {proxy} failed with status: {response.status_code}")
             return False
-    except (ProxyError, ConnectTimeout) as e:
+    except (ProxyError, ConnectTimeout, SSLError) as e:
         logger.warning(f"⚠️ Proxy {proxy} is not reachable. Error: {e}")
         return False
 
@@ -67,6 +70,7 @@ def init_driver(proxy=None):
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--ignore-certificate-errors")
     if proxy:
         logger.info(f"🌐 Using Proxy: {proxy}")
         chrome_options.add_argument(f'--proxy-server={proxy}')

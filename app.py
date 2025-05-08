@@ -12,8 +12,12 @@ import logging
 import os
 import shutil
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Setup logging to a file and console
+logging.basicConfig(
+    filename="logs.txt",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # Flask app setup
 app = Flask(__name__)
@@ -45,13 +49,11 @@ status = {
 def initialize_driver():
     logging.info("🖥️ Initializing Chrome Driver")
     
-    # Path for the Chrome binary
     chrome_path = shutil.which("google-chrome")
     if not chrome_path:
         logging.error("Google Chrome not found on PATH. Exiting.")
         exit(1)
 
-    # Chrome options
     chrome_options = webdriver.ChromeOptions()
     chrome_options.binary_location = chrome_path
     chrome_options.add_argument("--headless=new")
@@ -77,9 +79,8 @@ def initialize_driver():
     chrome_options.add_argument("--disable-renderer-backgrounding")
     chrome_options.add_argument("--disable-infobars")
 
-    # Start the ChromeDriver
     driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(30)  # Prevent long waits
+    driver.set_page_load_timeout(30)
     driver.maximize_window()
     return driver
 
@@ -176,6 +177,12 @@ def home():
 @app.route('/status')
 def get_status():
     return jsonify(status)
+
+@app.route('/logs')
+def get_logs():
+    with open("logs.txt", "r") as file:
+        logs = file.read().replace("\n", "<br>")
+    return f"<pre>{logs}</pre>"
 
 def run_bot():
     threading.Thread(target=search_appointments).start()

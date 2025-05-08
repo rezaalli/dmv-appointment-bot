@@ -1,6 +1,5 @@
 flask
 selenium
 anticaptchaofficial
-undetected-chromedriver
-requests
+webdriver-manager
 gunicorn

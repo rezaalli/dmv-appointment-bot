@@ -1,163 +1,141 @@
-from flask import Flask, render_template
+# app.py
+
+import os
+import time
+import logging
+from flask import Flask, jsonify
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-import time
-import logging
-import threading
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 
+# ========== Flask App Initialization ==========
 app = Flask(__name__)
 
-# Global configuration
-START_URL = "https://www.dmv.ca.gov/portal/appointments/select-location/A"
-PREFERRED_LOCATION = "San Diego Clairemont"
-RETRY_INTERVAL = 60  # Retry every 60 seconds if failure
-MAX_RETRIES = 5      # Maximum retries before full restart
-
-# Logging configuration
+# ========== Logger Setup ==========
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global driver instance
-driver = None
+# ========== Health Check ==========
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "Bot is running"}), 200
 
+# ========== Initialize WebDriver ==========
 def initialize_driver():
-    """
-    Initializes the Chrome WebDriver with headless options and navigation to the start URL.
-    Handles WebDriver exceptions and retries intelligently.
-    """
-    global driver
     try:
+        logger.info("🟢 Initializing Chrome Driver")
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        
-        driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
-        driver.get(START_URL)
-        logger.info("🌐 Navigated to Select Location page.")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager().install()),
+            options=chrome_options
+        )
+        logger.info("✅ Driver initialized successfully")
         return driver
+    except WebDriverException as e:
+        logger.error(f"❌ WebDriver initialization failed: {str(e)}")
+        time.sleep(60)  # Wait before retrying
+        return initialize_driver()
     except Exception as e:
-        logger.error(f"🚨 Error initializing driver: {e}")
+        logger.error(f"❌ Unexpected error during driver initialization: {str(e)}")
         return None
 
-
-def retry_on_failure(func):
-    """
-    Decorator to retry functions if they fail.
-    """
-    def wrapper(*args, **kwargs):
-        for attempt in range(MAX_RETRIES):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"⚠️ Attempt {attempt + 1} failed with error: {e}")
-                time.sleep(RETRY_INTERVAL)
-        logger.critical(f"❌ Maximum retries reached for {func.__name__}")
-        return False
-    return wrapper
-
-
-@retry_on_failure
-def select_location():
-    """
-    Selects the preferred location from the list.
-    """
-    logger.info("📍 Selecting preferred location...")
-    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "office-zip")))
-    search_box = driver.find_element(By.ID, "office-zip")
-    search_box.clear()
-    search_box.send_keys("92108")
-    search_box.submit()
-    
-    WebDriverWait(driver, 15).until(
-        EC.element_to_be_clickable((By.XPATH, f"//button[contains(text(), '{PREFERRED_LOCATION}')]"))
-    ).click()
-    logger.info(f"✅ Successfully selected location: {PREFERRED_LOCATION}")
-
-
-@retry_on_failure
-def select_date():
-    """
-    Selects the preferred date if available.
-    """
-    logger.info("📅 Searching for available dates...")
-    available_dates = driver.find_elements(By.CLASS_NAME, "open-date")
-    
-    for date in available_dates:
-        if "June" in date.text or "July" in date.text:
-            logger.info(f"🗓️ Selecting available date: {date.text}")
-            date.click()
-            return True
-    raise Exception("No suitable dates found.")
-
-
-@retry_on_failure
-def fill_form_and_submit():
-    """
-    Fills the form and submits the appointment request.
-    """
-    logger.info("✍️ Filling the appointment form...")
-    WebDriverWait(driver, 15).until(
-        EC.presence_of_element_located((By.NAME, "firstName"))
-    ).send_keys("Ashley")
-
-    driver.find_element(By.NAME, "lastName").send_keys("Barley")
-    driver.find_element(By.NAME, "email").send_keys("barleyohana@gmail.com")
-    driver.find_element(By.NAME, "phone").send_keys("808-927-6227")
-
-    logger.info("📤 Submitting the form...")
-    driver.find_element(By.XPATH, "//button[contains(text(), 'Submit')]").click()
-    logger.info("🎉 Appointment successfully booked!")
-
-
-def appointment_bot():
-    """
-    Main bot loop with recovery and resilience mechanisms.
-    """
-    global driver
+# ========== DMV Appointment Bot ==========
+def start_appointment_bot():
     while True:
         try:
-            if driver is None:
-                driver = initialize_driver()
-            
+            logger.info("🚀 Starting Appointment Bot")
+            driver = initialize_driver()
             if not driver:
-                logger.error("❌ Driver initialization failed, retrying...")
-                time.sleep(RETRY_INTERVAL)
+                logger.error("❌ Driver failed to initialize. Retrying in 60 seconds...")
+                time.sleep(60)
                 continue
+            
+            logger.info("🌐 Navigating to DMV Page")
+            driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
 
-            select_location()
-            select_date()
-            fill_form_and_submit()
-            logger.info("🎉 All steps completed successfully.")
+            # Wait for page load
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.ID, "zipCodeInput"))
+            )
+            logger.info("✅ Page loaded successfully")
+
+            # Enter Zip Code
+            zip_code_input = driver.find_element(By.ID, "zipCodeInput")
+            zip_code_input.send_keys("92108")
+            zip_code_input.submit()
+            logger.info("🏷️ Zip Code entered: 92108")
+
+            # Wait for locations to load
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "button[data-location-id]"))
+            )
+            logger.info("✅ Locations loaded")
+
+            # Select preferred location
+            preferred_location = driver.find_element(By.CSS_SELECTOR, "button[data-location-id='2']")
+            preferred_location.click()
+            logger.info("📍 Preferred location selected: San Diego Clairemont")
+
+            # Wait for the appointment page
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "calendar"))
+            )
+            logger.info("✅ Calendar loaded")
+
+            # Select the first available date
+            available_date = driver.find_element(By.CSS_SELECTOR, "button.calendar-date")
+            available_date.click()
+            logger.info("📅 Available date selected")
+
+            # Fill in the user information
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.ID, "firstName"))
+            )
+
+            driver.find_element(By.ID, "firstName").send_keys("Ashley")
+            driver.find_element(By.ID, "lastName").send_keys("Barley")
+            driver.find_element(By.ID, "email").send_keys("barleyohana@gmail.com")
+            driver.find_element(By.ID, "phone").send_keys("808-927-6227")
+            logger.info("✍️ User information entered successfully")
+
+            # Confirm Appointment
+            confirm_button = driver.find_element(By.ID, "confirmAppointment")
+            confirm_button.click()
+            logger.info("✅ Appointment confirmed successfully!")
+
+            # Close driver
+            driver.quit()
+
+            # Break loop after success
+            logger.info("🎉 Task completed successfully. Exiting bot.")
             break
 
+        except (NoSuchElementException, TimeoutException) as e:
+            logger.error(f"❌ Element not found or timeout: {str(e)}. Retrying in 60 seconds...")
+            driver.quit()
+            time.sleep(60)
+        except WebDriverException as e:
+            logger.error(f"❌ WebDriver error: {str(e)}. Restarting the driver...")
+            driver.quit()
+            time.sleep(60)
         except Exception as e:
-            logger.error(f"🔄 Encountered error: {e}, restarting process in 60 seconds...")
-            if driver:
-                driver.quit()
-            driver = initialize_driver()
-            time.sleep(RETRY_INTERVAL)
+            logger.error(f"❌ Unknown error occurred: {str(e)}. Retrying in 60 seconds...")
+            driver.quit()
+            time.sleep(60)
 
-
-@app.route('/')
-def home():
-    return render_template('index.html', status="Bot is running...")
-
-
-def start_bot():
-    """
-    Starts the bot in a separate thread to keep the Flask app responsive.
-    """
-    bot_thread = threading.Thread(target=appointment_bot)
-    bot_thread.start()
-
-
-# Start the bot when the app launches
-start_bot()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+# ========== Start Bot ==========
+if __name__ == "__main__":
+    logger.info("🌟 DMV Appointment Bot Service Starting...")
+    start_appointment_bot()

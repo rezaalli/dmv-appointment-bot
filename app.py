@@ -1,94 +1,99 @@
 # app.py
 import time
+import random
 import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
+import requests
 
-# --- Logging Setup ---
-logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- DMV Configuration ---
-DMV_URL = "https://www.dmv.ca.gov/portal/appointments/select-location/A"
-ZIP_CODE = "92108"
-LOCATION_NAME = "San Diego Clairemont"
+# Proxy list
+proxies = [
+    "35.86.81.136:3128",
+    "18.132.36.51:3128",
+    "80.1.215.23:8888",
+    "13.126.217.46:3128",
+    "119.156.195.173:3128",
+    # Add more proxies as needed...
+]
 
-# --- Initialize Selenium Driver ---
+# Initialize driver
 def init_driver():
-    """Initialize the Selenium WebDriver."""
     logger.info("🚀 Initializing Chrome Driver")
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    
+
+    # Set up ChromeDriver explicitly
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     driver.set_page_load_timeout(30)
+    logger.info("✅ Chrome Driver Initialized Successfully")
     return driver
 
-# --- Navigate to DMV Page ---
-def navigate_to_dmv_page(driver):
-    """Navigate to the DMV location selection page."""
-    try:
-        logger.info("🌎 Navigating to DMV Page")
-        driver.get(DMV_URL)
-        
-        # Wait for page to load
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Which office would you like to visit?')]"))
-        )
-        logger.info("✅ Successfully reached DMV Location Selection page.")
-        return True
-    except (TimeoutException, NoSuchElementException) as e:
-        logger.error(f"❌ Error navigating to DMV page: {str(e)}")
-    return False
+# Proxy rotation
+def get_random_proxy():
+    return random.choice(proxies)
 
-# --- Select Location ---
-def select_location(driver):
-    """Select the preferred DMV location."""
+# Check if the proxy is alive
+def is_proxy_alive(proxy):
     try:
-        logger.info(f"🗺️ Searching for {LOCATION_NAME}")
-        
-        # Search for the location button and click it
-        location_button = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.XPATH, f"//button[contains(text(), '{LOCATION_NAME}')]"))
-        )
-        location_button.click()
-        logger.info(f"✅ Successfully clicked {LOCATION_NAME}")
-        return True
-    except (TimeoutException, NoSuchElementException) as e:
-        logger.error(f"❌ Location not found or not clickable: {str(e)}")
+        response = requests.get("https://www.dmv.ca.gov", proxies={"http": proxy, "https": proxy}, timeout=5)
+        return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"⚠️ Proxy {proxy} is not reachable: {e}")
         return False
 
-# --- Main Bot Logic ---
+# Start navigation
+def navigate_to_dmv(driver):
+    driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
+    logger.info("🌐 Navigated to DMV Location Selection Page")
+    time.sleep(3)
+
+# Main loop
 def main_loop():
-    """Main bot logic for appointment booking."""
     while True:
-        driver = init_driver()
-        
-        if navigate_to_dmv_page(driver):
-            if select_location(driver):
-                logger.info("🎉 Successfully navigated and clicked location!")
-                break
+        try:
+            driver = init_driver()
+            navigate_to_dmv(driver)
+            
+            # Check if page is loaded correctly
+            if "Which office would you like to visit?" not in driver.page_source:
+                raise Exception("❌ Page did not load properly.")
+            
+            logger.info("✅ Page Loaded Successfully - Ready for next step.")
+            
+            # Example: Select a location (customize this step as needed)
+            select_buttons = driver.find_elements(By.XPATH, "//button[contains(text(), 'Select Location')]")
+            if select_buttons:
+                select_buttons[0].click()
+                logger.info("🏢 Location selected.")
             else:
-                logger.warning("🔄 Location selection failed. Retrying in 60 seconds...")
+                logger.warning("⚠️ No locations found, restarting in 60 seconds...")
+                driver.quit()
+                time.sleep(60)
+                continue
+            
+            # Further steps (Form filling, etc.) can go here...
+            
+            driver.quit()
+            time.sleep(30)  # Wait before retrying
         
-        # If failed, restart cycle
-        logger.info("🔄 Restarting cycle in 60 seconds...")
-        driver.quit()
-        time.sleep(60)
+        except Exception as e:
+            logger.error(f"❌ Critical error: {e}")
+            if driver:
+                driver.quit()
+            time.sleep(60)  # Retry after a minute
 
-    driver.quit()
-    logger.info("✅ Task Completed Successfully.")
-
-# --- Start the Bot ---
+# Run the bot
 if __name__ == "__main__":
     main_loop()

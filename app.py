@@ -1,79 +1,26 @@
 # app.py
-import os
 import time
-import random
 import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-import requests
-from requests.exceptions import ProxyError, ConnectTimeout, SSLError
 
-# --- Logging Configuration ---
+# --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Proxy List ---
-PROXY_LIST = [
-    "35.86.81.136:3128",
-    "18.132.36.51:3128",
-    "80.1.215.23:8888",
-    "13.126.217.46:3128",
-    "119.156.195.173:3128",
-    "34.221.119.219:999",
-    "54.184.124.175:14581",
-    "52.56.248.120:10001",
-    "18.236.175.208:10001",
-    "18.175.118.106:999"
-]
-
-FAILED_PROXIES = {}
-
-# --- Proxy Validation ---
-def is_proxy_alive(proxy):
-    """Check if a proxy is alive by pinging a simple site."""
-    try:
-        response = requests.get("https://www.dmv.ca.gov", 
-                                proxies={"http": f"http://{proxy}", "https": f"http://{proxy}"},
-                                timeout=5,
-                                verify=False)  # Disable SSL verification for testing
-        if response.status_code == 200:
-            logger.info(f"✅ Proxy {proxy} is alive.")
-            return True
-        else:
-            logger.warning(f"⚠️ Proxy {proxy} failed with status: {response.status_code}")
-            return False
-    except (ProxyError, ConnectTimeout, SSLError) as e:
-        logger.warning(f"⚠️ Proxy {proxy} is not reachable. Error: {e}")
-        return False
-
-def get_random_proxy():
-    """Rotate through the proxy list and return a working proxy."""
-    for proxy in PROXY_LIST:
-        if proxy not in FAILED_PROXIES or FAILED_PROXIES[proxy] < 3:
-            if is_proxy_alive(proxy):
-                return proxy
-            else:
-                FAILED_PROXIES[proxy] = FAILED_PROXIES.get(proxy, 0) + 1
-    logger.error("💥 All proxies failed. Restarting proxy rotation...")
-    FAILED_PROXIES.clear()
-    time.sleep(60)
-    return get_random_proxy()
-
-# --- Selenium Initialization ---
-def init_driver(proxy=None):
-    """Initialize Chrome driver with or without proxy."""
+# --- Selenium Driver Setup ---
+def init_driver():
+    """Initialize the Selenium WebDriver."""
+    logger.info("🚀 Initializing Chrome Driver")
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--ignore-certificate-errors")
-    if proxy:
-        logger.info(f"🌐 Using Proxy: {proxy}")
-        chrome_options.add_argument(f'--proxy-server={proxy}')
+    chrome_options.add_argument("--window-size=1920,1080")
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -81,46 +28,27 @@ def init_driver(proxy=None):
     return driver
 
 # --- Main Navigation Logic ---
-def navigate_dmv(driver):
-    """Navigate the DMV Appointment System."""
+def navigate_to_dmv_page(driver):
+    """Navigate to the DMV location selection page."""
     try:
-        driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
         logger.info("🌎 Navigating to DMV Page")
-
-        # Example of trying to find an element
-        try:
-            driver.find_element(By.XPATH, "//button[contains(text(), 'Select Location')]")
-            logger.info("✅ Location buttons found.")
-        except NoSuchElementException:
-            logger.error("❌ Element not found or timeout. Retrying in 60 seconds...")
-            time.sleep(60)
-            return False
+        driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
         
-        # Check for "no dates available" message
-        no_dates = driver.find_elements(By.XPATH, "//span[contains(text(), 'no dates available')]")
-        if no_dates:
-            logger.warning("⚠️ No dates available. Restarting...")
-            return False
-        
-        # Additional navigation logic here
-        
-        return True
-    except (TimeoutException, Exception) as e:
-        logger.error(f"💥 Critical error: {str(e)}")
-        return False
+        # Wait for page to load
+        time.sleep(5)
 
-# --- Main Loop ---
-while True:
-    logger.info("🚀 Starting Appointment Bot")
-    proxy = get_random_proxy()
-    driver = init_driver(proxy)
+        # Verify we reached the selection page
+        if driver.find_element(By.XPATH, "//h1[contains(text(), 'Which office would you like to visit?')]"):
+            logger.info("✅ Successfully reached DMV Location Selection page.")
+            return True
+    except (TimeoutException, NoSuchElementException) as e:
+        logger.error(f"❌ Error navigating to DMV page: {str(e)}")
+    return False
 
-    if not navigate_dmv(driver):
-        logger.info("🔄 Restarting cycle...")
-        driver.quit()
-        time.sleep(60)
-        continue
-    
-    logger.info("✅ Task completed successfully.")
-    driver.quit()
-    break
+# --- Main Execution ---
+driver = init_driver()
+if navigate_to_dmv_page(driver):
+    logger.info("🎉 Phase 1 Completed Successfully.")
+else:
+    logger.error("💥 Phase 1 Failed. Unable to reach DMV page.")
+driver.quit()

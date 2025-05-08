@@ -45,7 +45,7 @@ def initialize_driver():
         return driver
     except WebDriverException as e:
         logger.error(f"❌ WebDriver initialization failed: {str(e)}")
-        time.sleep(60)  # Wait before retrying
+        time.sleep(60)
         return initialize_driver()
     except Exception as e:
         logger.error(f"❌ Unexpected error during driver initialization: {str(e)}")
@@ -66,7 +66,15 @@ def start_appointment_bot():
             driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/A")
 
             # Wait for page load
-            WebDriverWait(driver, 15).until(
+            logger.info("⏳ Waiting for page to load completely...")
+            time.sleep(10)  # Added buffer time for JavaScript
+
+            # Screenshot for debugging
+            driver.save_screenshot('/mnt/data/dmv_screenshot.png')
+            logger.info("🖼️ Screenshot saved to /mnt/data/dmv_screenshot.png")
+
+            # Wait for the zip code input field
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.ID, "zipCodeInput"))
             )
             logger.info("✅ Page loaded successfully")
@@ -78,7 +86,7 @@ def start_appointment_bot():
             logger.info("🏷️ Zip Code entered: 92108")
 
             # Wait for locations to load
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "button[data-location-id]"))
             )
             logger.info("✅ Locations loaded")
@@ -89,7 +97,7 @@ def start_appointment_bot():
             logger.info("📍 Preferred location selected: San Diego Clairemont")
 
             # Wait for the appointment page
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "calendar"))
             )
             logger.info("✅ Calendar loaded")
@@ -100,7 +108,7 @@ def start_appointment_bot():
             logger.info("📅 Available date selected")
 
             # Fill in the user information
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.ID, "firstName"))
             )
 
@@ -124,6 +132,9 @@ def start_appointment_bot():
 
         except (NoSuchElementException, TimeoutException) as e:
             logger.error(f"❌ Element not found or timeout: {str(e)}. Retrying in 60 seconds...")
+            logger.error(f"🌎 Current URL: {driver.current_url}")
+            driver.save_screenshot('/mnt/data/error_screenshot.png')
+            logger.info("🖼️ Error screenshot saved to /mnt/data/error_screenshot.png")
             driver.quit()
             time.sleep(60)
         except WebDriverException as e:

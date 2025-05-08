@@ -1,12 +1,13 @@
 import time
 import logging
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from flask import Flask, jsonify
-from selenium.common.exceptions import NoSuchElementException, WebDriverException
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -15,115 +16,98 @@ logger = logging.getLogger(__name__)
 # Flask app for health checks
 app = Flask(__name__)
 
-# Health check endpoint
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "ok"}), 200
 
 # Configuration
-APPOINTMENT_URL = "https://www.dmv.ca.gov/portal/appointments/select-appointment-type/ukpx.aspx?pid=1&ruleid=341"
-RETRY_INTERVAL = 60  # 60 seconds
-WATCHDOG_INTERVAL = 300  # 5 minutes
+START_URL = "https://www.dmv.ca.gov/portal/appointments/select-location/A"
 ZIP_CODE = "92108"
 LOCATION_NAME = "San Diego Clairemont"
 PREFERRED_DATES = ["June 3", "June 4", "June 5", "June 6", "June 7", "June 8", "June 9", "June 10", "June 11"]
+RETRY_INTERVAL = 60  # 60 seconds
 
-# Options for headless Chrome
+# Chrome options
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--window-size=1920,1080")
-
 
 def initialize_driver():
-    """Initializes the Chrome WebDriver with options."""
-    logger.info("🌐 Starting Chrome Driver")
     try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        driver.get(APPOINTMENT_URL)
+        driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+        driver.get(START_URL)
+        logger.info("🌐 Navigated to Select Location page.")
         return driver
-    except WebDriverException as e:
-        logger.error(f"❌ WebDriver Initialization Failed: {e}")
+    except Exception as e:
+        logger.error(f"🚨 Error initializing driver: {e}")
         return None
 
-
-def search_and_book_appointment():
-    """Main logic for navigating the DMV site and booking an appointment."""
-    driver = initialize_driver()
-    if not driver:
-        return
-
+def enter_zip_and_search(driver):
     try:
-        # Selecting First-time DL Application
-        logger.info("🖱️ Clicking First-time DL Application")
-        driver.find_element(By.LINK_TEXT, "First-time DL Application").click()
-        time.sleep(2)
-
-        # Selecting "Get an Appointment"
-        logger.info("🖱️ Selecting 'Get an Appointment'")
-        driver.get(APPOINTMENT_URL)
-        time.sleep(2)
-
-        # Enter ZIP Code and search
-        logger.info("📍 Entering ZIP Code and searching")
-        zip_input = driver.find_element(By.CSS_SELECTOR, "input[placeholder='Enter City or ZIP Code']")
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Enter City or ZIP Code']")))
+        zip_input = driver.find_element(By.XPATH, "//input[@placeholder='Enter City or ZIP Code']")
         zip_input.send_keys(ZIP_CODE)
-        driver.find_element(By.CSS_SELECTOR, "button[aria-label='Search']").click()
-        time.sleep(3)
+        zip_input.submit()
+        logger.info(f"✅ Entered Zip Code: {ZIP_CODE}")
+    except NoSuchElementException:
+        logger.error("❌ Zip code input not found!")
+        return False
+    return True
 
-        # Select the preferred location
-        logger.info("📌 Selecting the preferred location")
+def select_location(driver):
+    try:
+        WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.XPATH, f"//button[contains(text(), '{LOCATION_NAME}')]")))
         location_button = driver.find_element(By.XPATH, f"//button[contains(text(), '{LOCATION_NAME}')]")
         location_button.click()
-        time.sleep(2)
+        logger.info(f"✅ Selected location: {LOCATION_NAME}")
+    except NoSuchElementException:
+        logger.error("❌ Location button not found!")
+        return False
+    return True
 
-        # Choose preferred date
-        logger.info("📅 Selecting preferred date")
-        for date in PREFERRED_DATES:
-            try:
-                date_button = driver.find_element(By.XPATH, f"//button[contains(text(), '{date}')]")
-                date_button.click()
-                logger.info(f"✅ Date {date} selected")
-                break
-            except NoSuchElementException:
-                logger.info(f"❌ Date {date} not available")
-        
-        # Complete the form with personal information
-        logger.info("📝 Filling out the personal information")
-        driver.find_element(By.ID, "FirstName").send_keys("Ashley")
-        driver.find_element(By.ID, "LastName").send_keys("Barley")
-        driver.find_element(By.ID, "Email").send_keys("barleyohana@gmail.com")
-        driver.find_element(By.ID, "Phone").send_keys("808-927-6227")
-        driver.find_element(By.CSS_SELECTOR, "input[value='text']").click()
-        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-        logger.info("🎉 Appointment successfully booked!")
+def choose_date_and_time(driver):
+    try:
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CLASS_NAME, "calendar-day")))
+        days = driver.find_elements(By.CLASS_NAME, "calendar-day")
+        for day in days:
+            if day.text in PREFERRED_DATES:
+                day.click()
+                logger.info(f"✅ Selected date: {day.text}")
+                return True
+        logger.info("🔍 No preferred dates available, retrying in 60 seconds.")
+    except NoSuchElementException:
+        logger.error("❌ Calendar not found!")
+    return False
 
+def fill_appointment_form(driver):
+    try:
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.NAME, "firstName")))
+        driver.find_element(By.NAME, "firstName").send_keys("Ashley")
+        driver.find_element(By.NAME, "lastName").send_keys("Barley")
+        driver.find_element(By.NAME, "email").send_keys("barleyohana@gmail.com")
+        driver.find_element(By.NAME, "phone").send_keys("808-927-6227")
+        driver.find_element(By.XPATH, "//label[contains(text(), 'Text me')]").click()
+        driver.find_element(By.XPATH, "//button[text()='Submit']").click()
+        logger.info("📌 Appointment successfully booked!")
     except NoSuchElementException as e:
-        logger.error(f"❌ Error Occurred: {e}")
-    except WebDriverException as e:
-        logger.error(f"❌ WebDriverException: {e}")
-    finally:
-        driver.quit()
+        logger.error(f"❌ Form element not found: {e}")
 
-
-def watchdog():
-    """Watches for crashes and restarts the bot if necessary."""
+def main():
     while True:
-        logger.info("👀 Watchdog: Checking bot health")
-        try:
-            search_and_book_appointment()
-        except Exception as e:
-            logger.error(f"🔥 Bot crashed with error: {e}. Restarting in {RETRY_INTERVAL} seconds...")
+        driver = initialize_driver()
+        if not driver:
             time.sleep(RETRY_INTERVAL)
-        logger.info(f"⏳ Retrying in {WATCHDOG_INTERVAL} seconds...")
-        time.sleep(WATCHDOG_INTERVAL)
+            continue
 
+        if enter_zip_and_search(driver):
+            if select_location(driver):
+                if choose_date_and_time(driver):
+                    fill_appointment_form(driver)
+        
+        logger.info(f"🔄 Retrying in {RETRY_INTERVAL} seconds...")
+        driver.quit()
+        time.sleep(RETRY_INTERVAL)
 
-# Start Flask in a separate thread
-from threading import Thread
-Thread(target=lambda: app.run(host='0.0.0.0', port=5000)).start()
-
-# Start Watchdog
-watchdog()
+if __name__ == "__main__":
+    main()

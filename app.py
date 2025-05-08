@@ -3,11 +3,12 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
 from anticaptchaofficial.imagecaptcha import imagecaptcha
+from webdriver_manager.chrome import ChromeDriverManager
 import time
 import threading
 import logging
-import base64
 import os
 import shutil
 
@@ -32,6 +33,14 @@ solver = imagecaptcha()
 solver.set_verbose(1)
 solver.set_key(captcha_api_key)
 
+# Global variables for status
+status = {
+    "current_location": "",
+    "last_checked": "",
+    "appointment_found": False,
+    "last_error": ""
+}
+
 # Initialize the ChromeDriver
 def initialize_driver():
     logging.info("🖥️ Initializing Chrome Driver")
@@ -45,22 +54,32 @@ def initialize_driver():
     # Chrome options
     chrome_options = webdriver.ChromeOptions()
     chrome_options.binary_location = chrome_path
-    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")  # Docker memory optimization
+    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-software-rasterizer")
-    chrome_options.add_argument("--disable-crash-reporter")
+    chrome_options.add_argument("--window-size=1280x1024")
     chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--disable-in-process-stack-traces")
+    chrome_options.add_argument("--disable-plugins")
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--disable-application-cache")
+    chrome_options.add_argument("--disable-crash-reporter")
     chrome_options.add_argument("--disable-logging")
+    chrome_options.add_argument("--disable-in-process-stack-traces")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--log-level=3")
     chrome_options.add_argument("--output=/dev/null")
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-client-side-phishing-detection")
+    chrome_options.add_argument("--disable-ipc-flooding-protection")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--disable-infobars")
 
     # Start the ChromeDriver
     driver = webdriver.Chrome(options=chrome_options)
+    driver.set_page_load_timeout(30)  # Prevent long waits
     driver.maximize_window()
     return driver
 
@@ -80,6 +99,7 @@ def solve_captcha(driver):
             return False
     except Exception as e:
         logging.error(f"❌ Error solving CAPTCHA: {e}")
+        status["last_error"] = str(e)
         return False
 
 def select_location(driver, location_name):
@@ -90,10 +110,12 @@ def select_location(driver, location_name):
             if location_name in parent.text:
                 button.click()
                 logging.info(f"✅ Location selected: {location_name}")
+                status["current_location"] = location_name
                 return True
         return False
     except Exception as e:
         logging.error(f"❌ Error selecting location: {e}")
+        status["last_error"] = str(e)
         return False
 
 def find_available_dates(driver):
@@ -108,6 +130,7 @@ def find_available_dates(driver):
         return False
     except Exception as e:
         logging.error(f"❌ Error finding available dates: {e}")
+        status["last_error"] = str(e)
         return False
 
 def fill_form(driver):
@@ -119,9 +142,11 @@ def fill_form(driver):
         driver.find_element(By.XPATH, "//label[contains(text(),'Text me')]").click()
         driver.find_element(By.XPATH, "//button[contains(text(),'Submit')]").click()
         logging.info("✅ Appointment successfully booked!")
+        status["appointment_found"] = True
         return True
     except Exception as e:
         logging.error(f"❌ Error filling the form: {e}")
+        status["last_error"] = str(e)
         return False
 
 def search_appointments():
@@ -129,7 +154,6 @@ def search_appointments():
     while not status["appointment_found"]:
         for location in preferred_locations:
             try:
-                status["current_location"] = location
                 driver.get("https://www.dmv.ca.gov/portal/appointments/select-location/S")
                 if not select_location(driver, location):
                     continue
@@ -137,16 +161,14 @@ def search_appointments():
                 time.sleep(2)
                 if find_available_dates(driver):
                     if fill_form(driver):
-                        status["appointment_found"] = True
                         driver.quit()
                         return
             except Exception as e:
                 logging.error(f"❌ Error during appointment search: {e}")
+                status["last_error"] = str(e)
             time.sleep(120)
 
-# Global variables for status
-status = {"current_location": "", "last_checked": "", "appointment_found": False}
-
+# Flask Endpoints
 @app.route('/')
 def home():
     return "🎉 DMV Bot is running and searching for appointments!"

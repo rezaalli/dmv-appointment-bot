@@ -1,5 +1,4 @@
-flask
 selenium
-anticaptchaofficial
 webdriver-manager
-gunicorn
+requests
+random-user-agent
